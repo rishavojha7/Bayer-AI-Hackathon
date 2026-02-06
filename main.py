@@ -1,11 +1,16 @@
 from typing import TypedDict, Annotated, Literal
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 import operator
 from datetime import datetime
 import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # ==================== STATE DEFINITIONS ====================
 
@@ -517,10 +522,11 @@ Return a JSON object:
 def create_incident_commander_graph():
     """Build the complete Autonomous Incident Commander graph"""
     
-    # Initialize LLM
-    llm = ChatOllama(
-        model="llama3.2",
+    # Initialize Gemini LLM
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-pro",
         temperature=0.1,
+        google_api_key=os.getenv("GOOGLE_API_KEY")
     )
     
     # Initialize agents with LLM
