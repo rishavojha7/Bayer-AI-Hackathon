@@ -1,0 +1,43 @@
+# Python dependencies for Autonomous First Responder
+
+# Core async framework
+asyncio>=3.4.3
+
+# Data handling
+dataclasses>=0.6
+typing-extensions>=4.5.0
+
+# Optional: Real integrations (uncomment as needed)
+
+# Prometheus client
+# prometheus-client>=0.17.0
+
+# Elasticsearch
+# elasticsearch>=8.8.0
+# elasticsearch-dsl>=8.8.0
+
+# Kubernetes
+# kubernetes>=27.2.0
+
+# PagerDuty
+# pdpyras>=5.1.0
+
+# AWS
+# boto3>=1.28.0
+
+# HTTP clients
+# requests>=2.31.0
+# aiohttp>=3.8.5
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Mocking
+pytest-mock>=3.11.1
+
+# Development
+black>=23.7.0
+flake8>=6.1.0
+mypy>=1.4.1
