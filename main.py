@@ -1,21 +1,21 @@
 from typing import TypedDict, Annotated, Literal
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 import operator
 from datetime import datetime
 import json
 import os
-import sys
-from dotenv import load_dotenv
+import logging
 
-# Fix Windows console encoding for emojis
-if sys.platform == 'win32':
-    sys.stdout.reconfigure(encoding='utf-8')
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
 
 # ==================== STATE DEFINITIONS ====================
 
@@ -47,6 +47,9 @@ class IncidentState(TypedDict):
     
     # Correlation IDs
     correlation_ids: dict
+    
+    # Log file path for analysis
+    log_file_path: str
     
     # Reasoning loop stage
     stage: Literal["DETECT", "PLAN", "INVESTIGATE", "DECIDE", "ACT", "REPORT"]
@@ -84,13 +87,19 @@ class CommanderAgent:
     
     def detect(self, state: IncidentState) -> IncidentState:
         """DETECT phase: Analyze initial alert and categorize severity"""
-        print(f"\n🚨 COMMANDER: Detecting incident {state['incident_id']}")
+        logger.info("="*70)
+        logger.info("DETECT PHASE STARTED")
+        logger.info("="*70)
+        print(f"\n[!] COMMANDER: Detecting incident {state['incident_id']}")
         print(f"   Service: {state['service']['name']} {state['service']['version']}")
         print(f"   Environment: {state['environment']} ({state['region']})")
         print(f"   Severity: {state['trigger']['severity']}")
         print(f"   Alert: {state['trigger']['alert_name']}")
         print(f"   Timestamp: {state['timestamp_utc']}")
         print(f"   Customer Impact: ${state['customer_impact']['revenue_impact_usd_per_min']}/min")
+        logger.info(f"Incident ID: {state['incident_id']}")
+        logger.info(f"Service: {state['service']['name']} v{state['service']['version']}")
+        logger.info(f"Severity: {state['trigger']['severity']}")
         
         state["messages"].append(
             SystemMessage(content=f"[DETECT] Incident detected in {state['service']['name']} ({state['environment']}) - {state['trigger']['alert_name']}")
@@ -101,7 +110,11 @@ class CommanderAgent:
     
     def plan(self, state: IncidentState) -> IncidentState:
         """PLAN phase: Develop investigation strategy"""
-        print("\n📋 COMMANDER: Formulating investigation plan...")
+        logger.info("="*70)
+        logger.info("PLAN PHASE STARTED")
+        logger.info("="*70)
+        print("\n[PLAN] COMMANDER: Formulating investigation plan...")
+        logger.info("Invoking LLM to create investigation plan...")
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert incident commander. Create a detailed investigation plan."),
@@ -159,9 +172,11 @@ Example: ["Step 1", "Step 2", "Step 3"]""")
         state["stage"] = "INVESTIGATE"
         state["next_action"] = "investigate_metrics"
         
+        logger.info(f"Investigation plan created with {len(investigation_plan)} steps")
         print("   Investigation Plan:")
         for i, step in enumerate(investigation_plan, 1):
             print(f"   {i}. {step}")
+            logger.debug(f"Plan step {i}: {step}")
         
         state["messages"].append(
             SystemMessage(content=f"[PLAN] Investigation plan created with {len(investigation_plan)} steps")
@@ -170,7 +185,11 @@ Example: ["Step 1", "Step 2", "Step 3"]""")
     
     def decide(self, state: IncidentState) -> IncidentState:
         """DECIDE phase: Analyze findings and determine root cause"""
-        print("\n🧠 COMMANDER: Analyzing findings and determining root cause...")
+        logger.info("="*70)
+        logger.info("DECIDE PHASE STARTED")
+        logger.info("="*70)
+        print("\n[AI] COMMANDER: Analyzing findings and determining root cause...")
+        logger.info("Synthesizing findings from all agents...")
         
         # Synthesize findings from all agents
         metrics = state.get("metrics_findings", {})
@@ -238,7 +257,12 @@ Confidence should be between 0.0 and 1.0.""")
     
     def act(self, state: IncidentState) -> IncidentState:
         """ACT phase: Determine and initiate remediation actions"""
-        print("\n⚡ COMMANDER: Initiating remediation actions...")
+        logger.info("="*70)
+        logger.info("ACT PHASE STARTED")
+        logger.info("="*70)
+        print("\n[ACT] COMMANDER: Initiating remediation actions...")
+        logger.info(f"Root cause: {state['root_cause']}")
+        logger.info(f"Confidence: {state['confidence_score']*100:.1f}%")
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert incident commander determining remediation actions."),
@@ -254,7 +278,7 @@ Example: ["Action 1", "Action 2", "Action 3"]""")
         response = self.llm.invoke(prompt.format_messages(
             root_cause=state["root_cause"],
             confidence=state["confidence_score"],
-            severity=state["severity"]
+            severity=state["trigger"]["severity"]
         ))
         
         try:
@@ -281,7 +305,11 @@ Example: ["Action 1", "Action 2", "Action 3"]""")
     
     def report(self, state: IncidentState) -> IncidentState:
         """REPORT phase: Generate comprehensive incident report"""
-        print("\n📊 COMMANDER: Generating incident report...")
+        logger.info("="*70)
+        logger.info("REPORT PHASE STARTED")
+        logger.info("="*70)
+        print("\n[REPORT] COMMANDER: Generating incident report...")
+        logger.info("Compiling final incident report...")
         
         report = f"""
 ╔══════════════════════════════════════════════════════════════╗
@@ -341,7 +369,7 @@ INVESTIGATION SUMMARY:
 REMEDIATION ACTIONS:
 {chr(10).join(f'  {i}. {action}' for i, action in enumerate(state['remediation_actions'], 1))}
 
-STATUS: Investigation Complete ✓
+STATUS: Investigation Complete [OK]
         """
         
         print(report)
@@ -363,7 +391,11 @@ class MetricsAgent:
     
     def analyze_metrics(self, state: IncidentState) -> IncidentState:
         """Analyze system metrics for anomalies"""
-        print("\n📈 METRICS AGENT: Analyzing system telemetry...")
+        logger.info("="*70)
+        logger.info("METRICS ANALYSIS STARTED")
+        logger.info("="*70)
+        print("\n[METRICS] METRICS AGENT: Analyzing system telemetry...")
+        logger.info("Analyzing metrics snapshot...")
         
         # Get metrics snapshot from the incident
         metrics_snapshot = state["metrics_snapshot"]
@@ -431,10 +463,10 @@ Return a JSON object with your findings:
         state["metrics_findings"] = metrics_findings
         state["next_action"] = "investigate_logs"
         
-        print(f"   P99 Latency: {metrics_findings.get('latency_p99', 'N/A')}ms (baseline: {metrics_findings.get('baseline_p99', 'N/A')}ms) {'⚠️ SPIKE' if metrics_findings.get('latency_spike') else '✓'}")
-        print(f"   CPU Utilization: {metrics_findings.get('cpu_value', 'N/A')}% {'⚠️ HIGH' if metrics_findings.get('cpu_utilization_high') else '✓'}")
-        print(f"   Memory Utilization: {metrics_findings.get('memory_value', 'N/A')}% {'⚠️ HIGH' if metrics_findings.get('memory_utilization_high') else '✓'}")
-        print(f"   Error Rate: {metrics_findings.get('error_rate_pct', 'N/A')}% {'⚠️ ELEVATED' if metrics_findings.get('error_rate_elevated') else '✓'}")
+        print(f"   P99 Latency: {metrics_findings.get('latency_p99', 'N/A')}ms (baseline: {metrics_findings.get('baseline_p99', 'N/A')}ms) {'[WARN] SPIKE' if metrics_findings.get('latency_spike') else '[OK]'}")
+        print(f"   CPU Utilization: {metrics_findings.get('cpu_value', 'N/A')}% {'[WARN] HIGH' if metrics_findings.get('cpu_utilization_high') else '[OK]'}")
+        print(f"   Memory Utilization: {metrics_findings.get('memory_value', 'N/A')}% {'[WARN] HIGH' if metrics_findings.get('memory_utilization_high') else '[OK]'}")
+        print(f"   Error Rate: {metrics_findings.get('error_rate_pct', 'N/A')}% {'[WARN] ELEVATED' if metrics_findings.get('error_rate_elevated') else '[OK]'}")
         if "analysis" in metrics_findings:
             print(f"   Analysis: {metrics_findings['analysis']}")
         
@@ -446,17 +478,269 @@ Return a JSON object with your findings:
 
 
 class LogsAgent:
-    """Forensic expert that scans distributed logs"""
+    """Forensic expert that scans distributed logs using streaming analysis"""
     
     def __init__(self, llm):
         self.llm = llm
+        # Import our log analyzer
+        from log_analyzer import (
+            StreamingLogAnalyzer, 
+            IsolationForestAnalyzer,
+            load_baseline_stats, 
+            save_baseline_stats
+        )
+        self.analyzer = StreamingLogAnalyzer()
+        self.iso_forest = IsolationForestAnalyzer(contamination=0.05)  # Expect 5% anomalies
+        self.baseline_stats_file = 'baseline_stats.json'
+        self.iso_forest_model_file = 'iso_forest_model.joblib'
+        self.baseline_stats = load_baseline_stats(self.baseline_stats_file)
+        
+        # Try to load pre-trained Isolation Forest model
+        if self.baseline_stats:
+            try:
+                self.iso_forest.load_model(self.iso_forest_model_file)
+            except:
+                # Train if model doesn't exist
+                if len(self.baseline_stats) >= 10:
+                    print("   [AI] Training Isolation Forest model...")
+                    self.iso_forest.train_on_baseline(self.baseline_stats)
+                    self.iso_forest.save_model(self.iso_forest_model_file)
     
     def analyze_logs(self, state: IncidentState) -> IncidentState:
-        """Scan logs for error patterns and stack traces"""
-        print("\n📜 LOGS AGENT: Scanning distributed logs...")
+        """Scan logs for error patterns using streaming analysis and anomaly detection"""
+        logger.info("="*70)
+        logger.info("LOG ANALYSIS STARTED")
+        logger.info("="*70)
+        print("\n[LOGS] LOGS AGENT: Scanning distributed logs with anomaly detection...")
+        logger.info("Starting log analysis with anomaly detection...")
         
-        # Get log signals from the incident
-        log_signals = state["log_signals"]
+        # Check if we have a log file to analyze
+        log_file_path = state.get('log_file_path', None)
+        logger.info(f"Log file path: {log_file_path}")
+        
+        if not log_file_path:
+            logger.warning("No log file provided, using simulated analysis")
+            # Fallback to simulated analysis if no log file provided
+            return self._analyze_simulated_logs(state)
+        
+        # If no baseline exists, create one first (Training Mode)
+        if not self.baseline_stats:
+            print("   [REFRESH] No baseline found. Entering TRAINING mode...")
+            self.baseline_stats = self.analyzer.calculate_baseline_stats(
+                log_file_path,
+                duration_field='duration_ms',
+                message_field='message'
+            )
+            
+            if self.baseline_stats:
+                from log_analyzer import save_baseline_stats
+                save_baseline_stats(self.baseline_stats, self.baseline_stats_file)
+                print(f"   [OK] Baseline created with {len(self.baseline_stats)} templates")
+                
+                # Train Isolation Forest on new baseline
+                if len(self.baseline_stats) >= 10:
+                    print("   [AI] Training Isolation Forest model...")
+                    self.iso_forest.train_on_baseline(self.baseline_stats)
+                    self.iso_forest.save_model(self.iso_forest_model_file)
+            else:
+                print("   [WARN] Could not create baseline - using simulated analysis")
+                return self._analyze_simulated_logs(state)
+        
+        # Detect anomalies using Z-score + Isolation Forest
+        print("   [SEARCH] Running hybrid anomaly detection (Z-Score + Isolation Forest)...")
+        logger.info("Running hybrid anomaly detection (Z-Score + Isolation Forest)...")
+        anomalies = self.analyzer.detect_anomalies(
+            log_file_path,
+            self.baseline_stats,
+            z_score_threshold=3.0,
+            duration_field='duration_ms',
+            message_field='message',
+            session_id_field='correlation_id',  # Enable session tracking
+            use_isolation_forest=True,  # Enable Isolation Forest
+            iso_forest_model=self.iso_forest  # Pass trained model
+        )
+        
+        # Analyze anomalies with LLM
+        if anomalies:
+            logger.info(f"Found {len(anomalies)} anomalies, selecting top 10 for LLM analysis")
+            # Limit to top 10 most severe anomalies for LLM analysis
+            top_anomalies = sorted(
+                anomalies, 
+                key=lambda x: abs(x.get('z_score', 0)) if x.get('z_score') else 0,
+                reverse=True
+            )[:10]
+            
+            anomaly_summary = self._format_anomalies_for_llm(top_anomalies)
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", "You are an expert log forensics analyst. Analyze detected anomalies and identify patterns."),
+                ("human", """Alert: {alert_description}
+
+Detected Anomalies (Z-Score Analysis):
+{anomalies}
+
+Total Anomalies Found: {anomaly_count}
+Baseline Templates: {template_count}
+
+Analyze these anomalies and provide insights.
+Return a JSON object:
+{{
+  "error_count": number,
+  "primary_error_type": "main error type",
+  "anomaly_patterns": ["list of patterns"],
+  "affected_services": number,
+  "error_rate_trend": "increasing/stable/decreasing",
+  "pattern_analysis": "detailed analysis",
+  "suspected_causes": ["list of possible causes"],
+  "severity_assessment": "low/medium/high/critical"
+}}""")
+            ])
+            
+            logger.info("Invoking LLM for anomaly analysis...")
+            response = self.llm.invoke(prompt.format_messages(
+                alert_description=state["trigger"]["alert_name"],
+                anomalies=anomaly_summary,
+                anomaly_count=len(anomalies),
+                template_count=len(self.baseline_stats)
+            ))
+            logger.info("LLM analysis complete")
+            
+            try:
+                logs_findings = json.loads(response.content)
+                logs_findings["anomalies_detected"] = len(anomalies)
+                logs_findings["top_anomalies"] = top_anomalies[:5]  # Store top 5
+                logs_findings["analysis_method"] = "z_score_streaming"
+                logs_findings["baseline_templates"] = len(self.baseline_stats)
+            except:
+                logs_findings = self._create_fallback_findings(anomalies)
+        else:
+            # No anomalies detected
+            logs_findings = {
+                "error_count": 0,
+                "primary_error_type": "None",
+                "anomaly_patterns": [],
+                "affected_services": 0,
+                "error_rate_trend": "stable",
+                "pattern_analysis": "No significant anomalies detected in logs",
+                "suspected_causes": [],
+                "severity_assessment": "low",
+                "anomalies_detected": 0,
+                "analysis_method": "z_score_streaming",
+                "baseline_templates": len(self.baseline_stats)
+            }
+        
+        state["logs_findings"] = logs_findings
+        state["next_action"] = "investigate_deploy"
+        
+        # Print summary
+        print(f"   Anomalies Detected: {len(anomalies)} {'[CRITICAL]' if len(anomalies) > 10 else '[WARN]' if len(anomalies) > 0 else '[OK]'}")
+        print(f"   Baseline Templates: {len(self.baseline_stats)}")
+        if anomalies:
+            print(f"   Primary Pattern: {logs_findings.get('primary_error_type', 'N/A')}")
+            print(f"   Severity: {logs_findings.get('severity_assessment', 'N/A').upper()}")
+            if "pattern_analysis" in logs_findings:
+                print(f"   Analysis: {logs_findings['pattern_analysis'][:100]}...")
+        
+        state["messages"].append(
+            SystemMessage(content=f"[INVESTIGATE-LOGS] Anomaly detection complete - {len(anomalies)} anomalies found using Z-score analysis")
+        )
+        
+        return state
+    
+    def _format_anomalies_for_llm(self, anomalies: list) -> str:
+        """Format anomalies with context for LLM consumption"""
+        formatted = []
+        for i, anomaly in enumerate(anomalies, 1):
+            # Format the anomaly itself
+            if anomaly.get('anomaly_type') == 'NEW_PATTERN':
+                anomaly_desc = (
+                    f"{i}. [NEW] NEW PATTERN DETECTED\n"
+                    f"   Template: {anomaly['template']}\n"
+                    f"   Duration: {anomaly['duration']}ms\n"
+                    f"   Severity: {anomaly['severity']}\n"
+                    f"   Timestamp: {anomaly.get('timestamp', 'N/A')}"
+                )
+            else:
+                anomaly_desc = (
+                    f"{i}. [WARN] {anomaly['anomaly_type']}\n"
+                    f"   Template: {anomaly['template']}\n"
+                    f"   Duration: {anomaly['duration']}ms (Expected: {anomaly['expected_mean']:.1f}ms ± {anomaly['expected_std']:.1f}ms)\n"
+                    f"   Z-Score: {anomaly['z_score']:.2f} (Deviation: {abs(anomaly['z_score']) * anomaly['expected_std']:.0f}ms)\n"
+                    f"   Severity: {anomaly['severity']}\n"
+                    f"   Timestamp: {anomaly.get('timestamp', 'N/A')}"
+                )
+            
+            # Add context if available
+            context = anomaly.get('context', {})
+            if context:
+                # Format previous logs
+                prev_logs = context.get('previous_logs', [])
+                if prev_logs:
+                    anomaly_desc += "\n\n   [LOGS] PREVIOUS CONTEXT (Last 5 logs before anomaly):"
+                    for j, log in enumerate(prev_logs[-5:], 1):
+                        anomaly_desc += f"\n      -{j}. [{log.get('level', 'INFO')}] {log.get('message', 'N/A')[:80]} ({log.get('duration_ms', 0)}ms)"
+                
+                # Current log
+                current = context.get('current_log', {})
+                if current:
+                    anomaly_desc += f"\n\n   [TARGET] ANOMALY LOG:"
+                    anomaly_desc += f"\n      [ACT] [{current.get('level', 'ERROR')}] {current.get('message', 'N/A')} ({current.get('duration_ms', 0)}ms)"
+                
+                # Format next logs
+                next_logs = context.get('next_logs', [])
+                if next_logs:
+                    anomaly_desc += "\n\n   [LOGS] AFTERMATH (Next 5 logs after anomaly):"
+                    for j, log in enumerate(next_logs[:5], 1):
+                        anomaly_desc += f"\n      +{j}. [{log.get('level', 'INFO')}] {log.get('message', 'N/A')[:80]} ({log.get('duration_ms', 0)}ms)"
+            
+            formatted.append(anomaly_desc)
+        
+        return "\n\n" + "="*80 + "\n\n".join(formatted)
+    
+    def _create_fallback_findings(self, anomalies: list) -> dict:
+        """Create fallback findings if LLM parsing fails"""
+        severity_counts = {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+        for a in anomalies:
+            severity_counts[a.get('severity', 'MEDIUM')] += 1
+        
+        return {
+            "error_count": len(anomalies),
+            "primary_error_type": "Multiple anomalies detected",
+            "anomaly_patterns": list(set(a['template'] for a in anomalies[:5])),
+            "affected_services": 1,
+            "error_rate_trend": "increasing",
+            "pattern_analysis": f"Detected {len(anomalies)} anomalies via Z-score analysis",
+            "suspected_causes": ["Performance degradation", "Resource exhaustion"],
+            "severity_assessment": "high" if severity_counts['HIGH'] > 0 else "medium",
+            "anomalies_detected": len(anomalies),
+            "analysis_method": "z_score_streaming",
+            "top_anomalies": anomalies[:5]
+        }
+    
+    def _analyze_simulated_logs(self, state: IncidentState) -> IncidentState:
+        """Fallback to simulated log analysis if no real logs available"""
+        print("   [WARN] No log file provided - using simulated analysis")
+        
+        import random
+        
+        # Get log signals from state
+        log_signals = state.get("log_signals", {})
+        
+        # Simulate log samples
+        error_samples = [
+            "ERROR: Connection timeout to database after 30s",
+            "WARN: Memory usage at 92% - approaching threshold",
+            "ERROR: NullPointerException in OrderService.processPayment()",
+            "ERROR: ServiceUnavailableException: Payment gateway not responding",
+            "FATAL: OutOfMemoryError: Java heap space"
+        ]
+        
+        simulated_log_data = {
+            "error_count": random.randint(50, 500),
+            "sample_errors": random.sample(error_samples, min(3, len(error_samples))),
+            "time_window": "last 1 hour",
+            "affected_services": random.randint(1, 5)
+        }
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert log forensics analyst. Analyze error logs and identify patterns."),
@@ -496,9 +780,9 @@ Return a JSON object:
             environment=state["environment"],
             severity=state["trigger"]["severity"],
             alert_name=state["trigger"]["alert_name"],
-            error_count=log_signals.get("error_count_last_5min"),
-            exception=log_signals.get("dominant_exception"),
-            stack_hash=log_signals.get("sample_stack_trace_hash"),
+            error_count=log_signals.get("error_count_last_5min", 0),
+            exception=log_signals.get("dominant_exception", "Unknown"),
+            stack_hash=log_signals.get("sample_stack_trace_hash", "N/A"),
             endpoints=", ".join(log_signals.get("affected_endpoints", [])),
             log_signals=json.dumps(log_signals, indent=2)
         ))
@@ -506,6 +790,7 @@ Return a JSON object:
         try:
             logs_findings = json.loads(response.content)
             logs_findings["correlation_id"] = state["correlation_ids"].get("trace_id_sample")
+            logs_findings["analysis_method"] = "simulated"
         except:
             # Fallback using actual log_signals
             logs_findings = {
@@ -517,18 +802,19 @@ Return a JSON object:
                 "affected_endpoint_count": len(log_signals.get("affected_endpoints", [])),
                 "error_rate_trend": "increasing",
                 "oom_detected": "OutOfMemory" in log_signals.get("dominant_exception", ""),
-                "correlation_id": state["correlation_ids"].get("trace_id_sample")
+                "correlation_id": state["correlation_ids"].get("trace_id_sample"),
+                "analysis_method": "simulated"
             }
         
         state["logs_findings"] = logs_findings
         state["next_action"] = "investigate_deploy"
         
-        print(f"   Error Count: {logs_findings['error_count']} {'🔥' if logs_findings['error_count'] > 1000 else '⚠️'}")
+        print(f"   Error Count: {logs_findings['error_count']} {'[CRITICAL]' if logs_findings['error_count'] > 1000 else '[WARN]'}")
         print(f"   Dominant Exception: {logs_findings.get('dominant_exception', 'N/A')}")
         print(f"   Affected Endpoints: {logs_findings.get('affected_endpoint_count', 'N/A')} endpoints")
         print(f"   Trend: {logs_findings.get('error_rate_trend', 'N/A')}")
         if logs_findings.get('oom_detected'):
-            print(f"   🚨 OOM DETECTED - Memory exhaustion likely")
+            print(f"   [!] OOM DETECTED - Memory exhaustion likely")
         if "pattern_analysis" in logs_findings:
             print(f"   Pattern: {logs_findings['pattern_analysis']}")
         
@@ -539,6 +825,7 @@ Return a JSON object:
         return state
 
 
+
 class DeployIntelligenceAgent:
     """Historian that maps errors against CI/CD timelines"""
     
@@ -547,7 +834,11 @@ class DeployIntelligenceAgent:
     
     def analyze_deployments(self, state: IncidentState) -> IncidentState:
         """Check deployment history and configuration changes"""
-        print("\n🚀 DEPLOY INTELLIGENCE: Analyzing deployment timeline...")
+        logger.info("="*70)
+        logger.info("DEPLOYMENT ANALYSIS STARTED")
+        logger.info("="*70)
+        print("\n[DEPLOY] DEPLOY INTELLIGENCE: Analyzing deployment timeline...")
+        logger.info("Analyzing deployment context...")
         
         # Get deployment context from the incident
         deployment_ctx = state["deployment_context"]
@@ -625,13 +916,13 @@ Return a JSON object:
             print(f"   Time Since Deploy: {deploy_findings.get('time_since_deploy_minutes')} minutes")
             print(f"   Changed Components: {', '.join(deploy_findings.get('changed_components', []))}")
             if deploy_findings.get('config_changes_detected'):
-                print(f"   🚨 Config Changes: {', '.join(deploy_findings.get('risky_config_changes', []))}")
+                print(f"   [!] Config Changes: {', '.join(deploy_findings.get('risky_config_changes', []))}")
             print(f"   Risk Assessment: {deploy_findings.get('risk_assessment', 'N/A').upper()}")
-            print(f"   Rollback Recommended: {'YES ⚠️' if deploy_findings.get('rollback_recommended') else 'No'}")
+            print(f"   Rollback Recommended: {'YES [WARN]' if deploy_findings.get('rollback_recommended') else 'No'}")
             if "correlation_analysis" in deploy_findings:
                 print(f"   Analysis: {deploy_findings['correlation_analysis']}")
         else:
-            print(f"   ✓ No deployment correlation detected")
+            print(f"   [OK] No deployment correlation detected")
         
         state["messages"].append(
             SystemMessage(content=f"[INVESTIGATE-DEPLOY] Deployment analysis complete")
@@ -661,16 +952,14 @@ def create_incident_commander_graph():
         context.verify_mode = ssl.CERT_NONE
         return context
     
-    ssl.create_default_context = _create_unverified_context
-    
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash-002",  # Use Gemini 1.5 Flash 002
+    # Initialize Ollama LLM (local model, GPU-accelerated)
+    logger.info("Initializing Ollama LLM with qwen3:8b model (GPU-accelerated)...")
+    llm = ChatOllama(
+        model="qwen3:8b",  # Using Qwen 3 8B model with GPU acceleration
         temperature=0.1,
-        google_api_key=os.getenv("GOOGLE_API_KEY"),
+        base_url="http://localhost:11434"  # Default Ollama URL
     )
-    
-    # Restore original function
-    ssl.create_default_context = _original_create_default_context
+    logger.info("LLM initialized successfully")
     
     # Initialize agents with LLM
     commander = CommanderAgent(llm)
@@ -723,10 +1012,19 @@ def run_incident_commander(incident_data: dict):
         - deployment_context: {...}
         - customer_impact: {...}
         - correlation_ids: {...}
+        - log_file_path: (optional) path to log file for analysis
     """
+    logger.info("#"*70)
+    logger.info("AUTONOMOUS INCIDENT COMMANDER STARTING")
+    logger.info("#"*70)
+    logger.info(f"Incident ID: {incident_data.get('incident_id')}")
+    logger.info(f"Environment: {incident_data.get('environment')}")
+    logger.info(f"Service: {incident_data.get('service', {}).get('name')}")
     
     # Create the graph
+    logger.info("Creating incident commander graph...")
     app = create_incident_commander_graph()
+    logger.info("Graph created successfully")
     
     # Initialize state with comprehensive incident data
     initial_state = {
@@ -741,6 +1039,7 @@ def run_incident_commander(incident_data: dict):
         "deployment_context": incident_data.get("deployment_context", {}),
         "customer_impact": incident_data.get("customer_impact", {}),
         "correlation_ids": incident_data.get("correlation_ids", {}),
+        "log_file_path": incident_data.get("log_file_path", ""),  # Empty string if not provided
         "stage": "DETECT",
         "investigation_plan": [],
         "metrics_findings": {},
@@ -761,7 +1060,12 @@ def run_incident_commander(incident_data: dict):
     print("="*70)
     
     # Execute the graph
+    logger.info("Invoking graph with initial state...")
     final_state = app.invoke(initial_state)
+    logger.info("Graph execution complete")
+    logger.info("#"*70)
+    logger.info("INCIDENT COMMANDER FINISHED")
+    logger.info("#"*70)
     
     return final_state
 
@@ -825,8 +1129,10 @@ if __name__ == "__main__":
         "correlation_ids": {
             "trace_id_sample": "4f3c9b2a8d1e",
             "request_id_sample": "req-882193ab"
-        }
+        },
+        "log_file_path": "sample_logs.json"  # Add log file for analysis
     }
+
     
     # Run the incident commander with the comprehensive incident
     result = run_incident_commander(example_incident)
@@ -834,5 +1140,6 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("  EXECUTION COMPLETE")
     print("="*70)
+
 
 

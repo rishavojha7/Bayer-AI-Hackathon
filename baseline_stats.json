@@ -1,0 +1,12 @@
+{
+  "User {num} initiated payment transaction": {
+    "count": 5,
+    "mean": 148.4,
+    "std_dev": 2.416609194718914,
+    "min": 145.0,
+    "max": 152.0,
+    "p50": 148.0,
+    "p95": 151.6,
+    "p99": 151.92
+  }
+}
