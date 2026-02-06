@@ -1,0 +1,65 @@
+{
+  "incident_id": "inc-2026-02-06-113742",
+  "timestamp_utc": "2026-02-06T11:37:42.391Z",
+  "environment": "production",
+  "region": "ap-southeast-1",
+  "service": {
+    "name": "checkout-service",
+    "version": "v2.18.4",
+    "instance_count": 24
+  },
+
+  "trigger": {
+    "type": "alert",
+    "source": "prometheus",
+    "severity": "critical",
+    "alert_name": "High_P99_Latency",
+    "firing_duration_seconds": 312
+  },
+
+  "metrics_snapshot": {
+    "p99_latency_ms": 1860,
+    "baseline_p99_latency_ms": 420,
+    "cpu_utilization_pct": 91.4,
+    "memory_utilization_pct": 88.9,
+    "error_rate_pct": 3.7
+  },
+
+  "log_signals": {
+    "error_count_last_5min": 1243,
+    "dominant_exception": "java.lang.OutOfMemoryError: GC overhead limit exceeded",
+    "sample_stack_trace_hash": "a9f3c2d7",
+    "affected_endpoints": [
+      "/checkout/confirm",
+      "/checkout/apply-coupon"
+    ]
+  },
+
+  "deployment_context": {
+    "last_deploy_id": "deploy-74219",
+    "last_deploy_timestamp_utc": "2026-02-06T11:12:08.000Z",
+    "time_since_last_deploy_minutes": 25,
+    "changed_components": [
+      "pricing-engine",
+      "promotion-rules"
+    ],
+    "config_changes": [
+      {
+        "key": "promo.cache.ttl",
+        "old_value": "300s",
+        "new_value": "0s"
+      }
+    ]
+  },
+
+  "customer_impact": {
+    "estimated_affected_requests_pct": 18.6,
+    "failed_transactions_last_10min": 742,
+    "revenue_impact_usd_per_min": 4200
+  },
+
+  "correlation_ids": {
+    "trace_id_sample": "4f3c9b2a8d1e",
+    "request_id_sample": "req-882193ab"
+  }
+}

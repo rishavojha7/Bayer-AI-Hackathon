@@ -7,7 +7,12 @@ import operator
 from datetime import datetime
 import json
 import os
+import sys
 from dotenv import load_dotenv
+
+# Fix Windows console encoding for emojis
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 # Load environment variables
 load_dotenv()
@@ -17,10 +22,31 @@ load_dotenv()
 class IncidentState(TypedDict):
     """Main state object tracking the incident investigation"""
     # Core incident data
-    alert_id: str
-    alert_description: str
-    severity: str
-    timestamp: str
+    incident_id: str
+    timestamp_utc: str
+    environment: str
+    region: str
+    
+    # Service information
+    service: dict  # {name, version, instance_count}
+    
+    # Trigger information
+    trigger: dict  # {type, source, severity, alert_name, firing_duration_seconds}
+    
+    # Raw metrics snapshot
+    metrics_snapshot: dict
+    
+    # Log signals
+    log_signals: dict
+    
+    # Deployment context
+    deployment_context: dict
+    
+    # Customer impact
+    customer_impact: dict
+    
+    # Correlation IDs
+    correlation_ids: dict
     
     # Reasoning loop stage
     stage: Literal["DETECT", "PLAN", "INVESTIGATE", "DECIDE", "ACT", "REPORT"]
@@ -58,12 +84,16 @@ class CommanderAgent:
     
     def detect(self, state: IncidentState) -> IncidentState:
         """DETECT phase: Analyze initial alert and categorize severity"""
-        print(f"\n🚨 COMMANDER: Detecting incident {state['alert_id']}")
-        print(f"   Alert: {state['alert_description']}")
-        print(f"   Severity: {state['severity']}")
+        print(f"\n🚨 COMMANDER: Detecting incident {state['incident_id']}")
+        print(f"   Service: {state['service']['name']} {state['service']['version']}")
+        print(f"   Environment: {state['environment']} ({state['region']})")
+        print(f"   Severity: {state['trigger']['severity']}")
+        print(f"   Alert: {state['trigger']['alert_name']}")
+        print(f"   Timestamp: {state['timestamp_utc']}")
+        print(f"   Customer Impact: ${state['customer_impact']['revenue_impact_usd_per_min']}/min")
         
         state["messages"].append(
-            SystemMessage(content=f"[DETECT] Incident detected: {state['alert_description']}")
+            SystemMessage(content=f"[DETECT] Incident detected in {state['service']['name']} ({state['environment']}) - {state['trigger']['alert_name']}")
         )
         state["stage"] = "PLAN"
         state["next_action"] = "plan"
@@ -75,8 +105,24 @@ class CommanderAgent:
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert incident commander. Create a detailed investigation plan."),
-            ("human", """Alert: {alert_description}
+            ("human", """Service: {service_name} v{service_version}
+Environment: {environment} ({region})
 Severity: {severity}
+Alert: {alert_name}
+
+Metrics Snapshot:
+{metrics}
+
+Log Signals:
+{logs}
+
+Deployment Context:
+{deployment}
+
+Customer Impact:
+- Affected Requests: {affected_pct}%
+- Failed Transactions: {failed_txn}
+- Revenue Impact: ${revenue_impact}/min
 
 Create a structured investigation plan with 4-6 specific steps to diagnose this incident.
 Return ONLY a JSON array of strings, nothing else.
@@ -84,8 +130,18 @@ Example: ["Step 1", "Step 2", "Step 3"]""")
         ])
         
         response = self.llm.invoke(prompt.format_messages(
-            alert_description=state["alert_description"],
-            severity=state["severity"]
+            service_name=state["service"]["name"],
+            service_version=state["service"]["version"],
+            environment=state["environment"],
+            region=state["region"],
+            severity=state["trigger"]["severity"],
+            alert_name=state["trigger"]["alert_name"],
+            metrics=json.dumps(state["metrics_snapshot"], indent=2),
+            logs=json.dumps(state["log_signals"], indent=2),
+            deployment=json.dumps(state["deployment_context"], indent=2),
+            affected_pct=state["customer_impact"]["estimated_affected_requests_pct"],
+            failed_txn=state["customer_impact"]["failed_transactions_last_10min"],
+            revenue_impact=state["customer_impact"]["revenue_impact_usd_per_min"]
         ))
         
         try:
@@ -123,7 +179,14 @@ Example: ["Step 1", "Step 2", "Step 3"]""")
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert incident commander performing root cause analysis."),
-            ("human", """Alert: {alert_description}
+            ("human", """Service: {service_name} v{service_version}
+Environment: {environment}
+Alert: {alert_name}
+Severity: {severity}
+
+Customer Impact:
+- Revenue Loss: ${revenue_impact}/min
+- Failed Transactions: {failed_txn} in last 10min
 
 Metrics Findings:
 {metrics}
@@ -140,7 +203,13 @@ Confidence should be between 0.0 and 1.0.""")
         ])
         
         response = self.llm.invoke(prompt.format_messages(
-            alert_description=state["alert_description"],
+            service_name=state["service"]["name"],
+            service_version=state["service"]["version"],
+            environment=state["environment"],
+            alert_name=state["trigger"]["alert_name"],
+            severity=state["trigger"]["severity"],
+            revenue_impact=state["customer_impact"]["revenue_impact_usd_per_min"],
+            failed_txn=state["customer_impact"]["failed_transactions_last_10min"],
             metrics=json.dumps(metrics, indent=2),
             logs=json.dumps(logs, indent=2),
             deploy=json.dumps(deploy, indent=2)
@@ -220,10 +289,36 @@ Example: ["Action 1", "Action 2", "Action 3"]""")
 ╚══════════════════════════════════════════════════════════════╝
 
 INCIDENT DETAILS:
-  ID: {state['alert_id']}
-  Timestamp: {state['timestamp']}
-  Severity: {state['severity']}
-  Description: {state['alert_description']}
+  Incident ID: {state['incident_id']}
+  Service: {state['service']['name']} v{state['service']['version']}
+  Environment: {state['environment']} ({state['region']})
+  Instance Count: {state['service']['instance_count']}
+  Timestamp: {state['timestamp_utc']}
+  Alert: {state['trigger']['alert_name']}
+  Severity: {state['trigger']['severity']}
+  Firing Duration: {state['trigger']['firing_duration_seconds']}s
+
+CUSTOMER IMPACT:
+  Affected Requests: {state['customer_impact']['estimated_affected_requests_pct']}%
+  Failed Transactions (10min): {state['customer_impact']['failed_transactions_last_10min']}
+  Revenue Impact: ${state['customer_impact']['revenue_impact_usd_per_min']}/minute
+
+INITIAL METRICS SNAPSHOT:
+  P99 Latency: {state['metrics_snapshot'].get('p99_latency_ms', 'N/A')}ms (baseline: {state['metrics_snapshot'].get('baseline_p99_latency_ms', 'N/A')}ms)
+  CPU Utilization: {state['metrics_snapshot'].get('cpu_utilization_pct', 'N/A')}%
+  Memory Utilization: {state['metrics_snapshot'].get('memory_utilization_pct', 'N/A')}%
+  Error Rate: {state['metrics_snapshot'].get('error_rate_pct', 'N/A')}%
+
+LOG SIGNALS:
+  Error Count (5min): {state['log_signals']['error_count_last_5min']}
+  Dominant Exception: {state['log_signals']['dominant_exception']}
+  Affected Endpoints: {', '.join(state['log_signals']['affected_endpoints'])}
+
+DEPLOYMENT CONTEXT:
+  Last Deploy: {state['deployment_context']['last_deploy_id']}
+  Deploy Time: {state['deployment_context']['last_deploy_timestamp_utc']}
+  Time Since Deploy: {state['deployment_context']['time_since_last_deploy_minutes']} minutes
+  Changed Components: {', '.join(state['deployment_context']['changed_components'])}
 
 ROOT CAUSE ANALYSIS:
   Finding: {state['root_cause']}
@@ -270,57 +365,65 @@ class MetricsAgent:
         """Analyze system metrics for anomalies"""
         print("\n📈 METRICS AGENT: Analyzing system telemetry...")
         
-        # Simulate actual metrics data (in production, query from monitoring systems)
-        import random
-        simulated_metrics = {
-            "cpu_usage": random.randint(60, 95),
-            "memory_usage": random.randint(70, 90),
-            "p95_latency_ms": random.randint(500, 2000),
-            "p99_latency_ms": random.randint(1000, 3000),
-            "request_rate": random.randint(100, 1000),
-            "error_rate": random.uniform(0.01, 0.15),
-            "disk_io_wait": random.uniform(0.1, 5.0),
-            "network_throughput_mbps": random.randint(50, 500)
-        }
+        # Get metrics snapshot from the incident
+        metrics_snapshot = state["metrics_snapshot"]
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert telemetry analyst. Analyze system metrics and identify anomalies."),
-            ("human", """Alert: {alert_description}
+            ("human", """Service: {service_name} v{service_version}
+Environment: {environment}
+Instance Count: {instance_count}
+Severity: {severity}
+Alert: {alert_name}
 
-Current System Metrics:
+Metrics Snapshot:
 {metrics}
 
 Analyze these metrics and identify any anomalies or concerning patterns.
+Consider the baseline values and current readings.
 Return a JSON object with your findings:
 {{
-  "cpu_spike": true/false,
-  "cpu_value": number,
-  "memory_spike": true/false,
-  "memory_value": number,
   "latency_spike": true/false,
-  "latency_p95": number,
+  "latency_p99": number,
+  "baseline_p99": number,
+  "latency_increase_pct": number,
+  "cpu_utilization_high": true/false,
+  "cpu_value": number,
+  "memory_utilization_high": true/false,
+  "memory_value": number,
+  "error_rate_elevated": true/false,
+  "error_rate_pct": number,
   "analysis": "brief analysis",
-  "anomalies_detected": ["list of anomalies"]
+  "anomalies_detected": ["list of anomalies"],
+  "critical_issues": ["list of critical issues"]
 }}""")
         ])
         
         response = self.llm.invoke(prompt.format_messages(
-            alert_description=state["alert_description"],
-            metrics=json.dumps(simulated_metrics, indent=2)
+            service_name=state["service"]["name"],
+            service_version=state["service"]["version"],
+            environment=state["environment"],
+            instance_count=state["service"]["instance_count"],
+            severity=state["trigger"]["severity"],
+            alert_name=state["trigger"]["alert_name"],
+            metrics=json.dumps(metrics_snapshot, indent=2)
         ))
         
         try:
             metrics_findings = json.loads(response.content)
             metrics_findings["analysis_timestamp"] = datetime.now().isoformat()
         except:
-            # Fallback
+            # Fallback using actual metrics_snapshot
             metrics_findings = {
-                "cpu_spike": simulated_metrics["cpu_usage"] > 80,
-                "cpu_value": simulated_metrics["cpu_usage"],
-                "memory_spike": simulated_metrics["memory_usage"] > 85,
-                "memory_value": simulated_metrics["memory_usage"],
-                "latency_spike": simulated_metrics["p95_latency_ms"] > 1000,
-                "latency_p95": simulated_metrics["p95_latency_ms"],
+                "latency_spike": metrics_snapshot.get("p99_latency_ms", 0) > metrics_snapshot.get("baseline_p99_latency_ms", 0) * 2,
+                "latency_p99": metrics_snapshot.get("p99_latency_ms", 0),
+                "baseline_p99": metrics_snapshot.get("baseline_p99_latency_ms", 0),
+                "cpu_utilization_high": metrics_snapshot.get("cpu_utilization_pct", 0) > 80,
+                "cpu_value": metrics_snapshot.get("cpu_utilization_pct", 0),
+                "memory_utilization_high": metrics_snapshot.get("memory_utilization_pct", 0) > 85,
+                "memory_value": metrics_snapshot.get("memory_utilization_pct", 0),
+                "error_rate_elevated": metrics_snapshot.get("error_rate_pct", 0) > 2,
+                "error_rate_pct": metrics_snapshot.get("error_rate_pct", 0),
                 "analysis": "Metrics analyzed",
                 "analysis_timestamp": datetime.now().isoformat()
             }
@@ -328,9 +431,10 @@ Return a JSON object with your findings:
         state["metrics_findings"] = metrics_findings
         state["next_action"] = "investigate_logs"
         
-        print(f"   CPU Usage: {metrics_findings.get('cpu_value', 'N/A')}% {'⚠️ SPIKE' if metrics_findings.get('cpu_spike') else '✓'}")
-        print(f"   Memory Usage: {metrics_findings.get('memory_value', 'N/A')}% {'⚠️ SPIKE' if metrics_findings.get('memory_spike') else '✓'}")
-        print(f"   P95 Latency: {metrics_findings.get('latency_p95', 'N/A')}ms {'⚠️ SPIKE' if metrics_findings.get('latency_spike') else '✓'}")
+        print(f"   P99 Latency: {metrics_findings.get('latency_p99', 'N/A')}ms (baseline: {metrics_findings.get('baseline_p99', 'N/A')}ms) {'⚠️ SPIKE' if metrics_findings.get('latency_spike') else '✓'}")
+        print(f"   CPU Utilization: {metrics_findings.get('cpu_value', 'N/A')}% {'⚠️ HIGH' if metrics_findings.get('cpu_utilization_high') else '✓'}")
+        print(f"   Memory Utilization: {metrics_findings.get('memory_value', 'N/A')}% {'⚠️ HIGH' if metrics_findings.get('memory_utilization_high') else '✓'}")
+        print(f"   Error Rate: {metrics_findings.get('error_rate_pct', 'N/A')}% {'⚠️ ELEVATED' if metrics_findings.get('error_rate_elevated') else '✓'}")
         if "analysis" in metrics_findings:
             print(f"   Analysis: {metrics_findings['analysis']}")
         
@@ -351,77 +455,80 @@ class LogsAgent:
         """Scan logs for error patterns and stack traces"""
         print("\n📜 LOGS AGENT: Scanning distributed logs...")
         
-        import random
-        
-        # Simulate log samples (in production, query from ELK, Splunk, CloudWatch Logs, etc.)
-        error_samples = [
-            "ERROR: Connection timeout to database after 30s",
-            "WARN: Memory usage at 92% - approaching threshold",
-            "ERROR: NullPointerException in OrderService.processPayment()",
-            "ERROR: ServiceUnavailableException: Payment gateway not responding",
-            "FATAL: OutOfMemoryError: Java heap space"
-        ]
-        
-        simulated_log_data = {
-            "error_count": random.randint(50, 500),
-            "sample_errors": random.sample(error_samples, min(3, len(error_samples))),
-            "time_window": "last 1 hour",
-            "affected_services": random.randint(1, 5)
-        }
+        # Get log signals from the incident
+        log_signals = state["log_signals"]
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert log forensics analyst. Analyze error logs and identify patterns."),
-            ("human", """Alert: {alert_description}
+            ("human", """Service: {service_name} v{service_version}
+Environment: {environment}
+Severity: {severity}
+Alert: {alert_name}
 
-Log Data:
-Error Count: {error_count}
-Time Window: {time_window}
-Sample Error Messages:
-{sample_errors}
+Log Signals:
+Error Count (last 5min): {error_count}
+Dominant Exception: {exception}
+Stack Trace Hash: {stack_hash}
+Affected Endpoints: {endpoints}
+
+Additional Context:
+{log_signals}
 
 Analyze these logs and identify error patterns, root causes, and trends.
 Return a JSON object:
 {{
   "error_count": number,
-  "primary_error_type": "main error type",
-  "stack_trace_found": true/false,
-  "affected_services": number,
+  "dominant_exception": "exception type",
+  "exception_category": "memory/connection/timeout/other",
+  "stack_trace_analyzed": true/false,
+  "affected_endpoints": ["list of endpoints"],
+  "affected_endpoint_count": number,
   "error_rate_trend": "increasing/stable/decreasing",
   "pattern_analysis": "detailed analysis",
-  "suspected_causes": ["list of possible causes"]
+  "suspected_causes": ["list of possible causes"],
+  "oom_detected": true/false
 }}""")
         ])
         
         response = self.llm.invoke(prompt.format_messages(
-            alert_description=state["alert_description"],
-            error_count=simulated_log_data["error_count"],
-            time_window=simulated_log_data["time_window"],
-            sample_errors="\n".join(simulated_log_data["sample_errors"])
+            service_name=state["service"]["name"],
+            service_version=state["service"]["version"],
+            environment=state["environment"],
+            severity=state["trigger"]["severity"],
+            alert_name=state["trigger"]["alert_name"],
+            error_count=log_signals.get("error_count_last_5min"),
+            exception=log_signals.get("dominant_exception"),
+            stack_hash=log_signals.get("sample_stack_trace_hash"),
+            endpoints=", ".join(log_signals.get("affected_endpoints", [])),
+            log_signals=json.dumps(log_signals, indent=2)
         ))
         
         try:
             logs_findings = json.loads(response.content)
-            logs_findings["first_occurrence"] = "2026-02-06T10:30:00Z"
-            logs_findings["correlation_id"] = f"corr-{random.randint(1000, 9999)}"
+            logs_findings["correlation_id"] = state["correlation_ids"].get("trace_id_sample")
         except:
-            # Fallback
+            # Fallback using actual log_signals
             logs_findings = {
-                "error_count": simulated_log_data["error_count"],
-                "primary_error_type": "ServiceException",
-                "stack_trace_found": True,
-                "affected_services": simulated_log_data["affected_services"],
+                "error_count": log_signals.get("error_count_last_5min", 0),
+                "dominant_exception": log_signals.get("dominant_exception", "Unknown"),
+                "exception_category": "memory" if "OutOfMemory" in log_signals.get("dominant_exception", "") else "other",
+                "stack_trace_analyzed": True,
+                "affected_endpoints": log_signals.get("affected_endpoints", []),
+                "affected_endpoint_count": len(log_signals.get("affected_endpoints", [])),
                 "error_rate_trend": "increasing",
-                "first_occurrence": "2026-02-06T10:30:00Z",
-                "correlation_id": f"corr-{random.randint(1000, 9999)}"
+                "oom_detected": "OutOfMemory" in log_signals.get("dominant_exception", ""),
+                "correlation_id": state["correlation_ids"].get("trace_id_sample")
             }
         
         state["logs_findings"] = logs_findings
         state["next_action"] = "investigate_deploy"
         
-        print(f"   Error Count: {logs_findings['error_count']} {'🔥' if logs_findings['error_count'] > 100 else '⚠️'}")
-        print(f"   Primary Error: {logs_findings.get('primary_error_type', 'N/A')}")
-        print(f"   Affected Services: {logs_findings.get('affected_services', 'N/A')}")
+        print(f"   Error Count: {logs_findings['error_count']} {'🔥' if logs_findings['error_count'] > 1000 else '⚠️'}")
+        print(f"   Dominant Exception: {logs_findings.get('dominant_exception', 'N/A')}")
+        print(f"   Affected Endpoints: {logs_findings.get('affected_endpoint_count', 'N/A')} endpoints")
         print(f"   Trend: {logs_findings.get('error_rate_trend', 'N/A')}")
+        if logs_findings.get('oom_detected'):
+            print(f"   🚨 OOM DETECTED - Memory exhaustion likely")
         if "pattern_analysis" in logs_findings:
             print(f"   Pattern: {logs_findings['pattern_analysis']}")
         
@@ -442,73 +549,89 @@ class DeployIntelligenceAgent:
         """Check deployment history and configuration changes"""
         print("\n🚀 DEPLOY INTELLIGENCE: Analyzing deployment timeline...")
         
-        # Simulate deployment history (in production, query CI/CD systems)
-        import random
-        from datetime import timedelta
-        
-        recent_deployments = []
-        for i in range(random.randint(1, 3)):
-            recent_deployments.append({
-                "deployment_id": f"deploy-{random.randint(1000, 9999)}",
-                "timestamp": (datetime.now() - timedelta(hours=random.randint(1, 48))).isoformat(),
-                "service": random.choice(["payment-service", "order-service", "user-service"]),
-                "version": f"v1.{random.randint(0, 5)}.{random.randint(0, 10)}",
-                "status": "completed"
-            })
+        # Get deployment context from the incident
+        deployment_ctx = state["deployment_context"]
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert deployment analyst. Analyze deployment history and correlate with incidents."),
-            ("human", """Alert: {alert_description}
+            ("human", """Service: {service_name} v{service_version}
+Environment: {environment}
 Incident Time: {incident_time}
+Alert Firing Duration: {firing_duration}s
 
-Recent Deployments:
-{deployments}
+Deployment Context:
+Last Deploy ID: {deploy_id}
+Last Deploy Time: {deploy_time}
+Time Since Deploy: {time_since_deploy} minutes
+Changed Components: {changed_components}
+Config Changes: {config_changes}
 
-Analyze if any recent deployments could be related to this incident.
+Full Context:
+{deployment_context}
+
+Analyze if this deployment is related to the incident.
 Return a JSON object:
 {{
-  "recent_deployment": true/false,
-  "deployment_time": "ISO timestamp or null",
-  "deployment_id": "ID or null",
-  "config_changes": true/false,
-  "rollback_available": true/false,
-  "correlation_analysis": "analysis of deployment correlation",
-  "risk_assessment": "low/medium/high"
+  "deployment_related": true/false,
+  "deployment_id": "ID",
+  "deployment_time": "ISO timestamp",
+  "time_since_deploy_minutes": number,
+  "changed_components": ["list"],
+  "config_changes_detected": true/false,
+  "risky_config_changes": ["list of risky changes"],
+  "rollback_recommended": true/false,
+  "correlation_analysis": "detailed analysis",
+  "risk_assessment": "low/medium/high/critical"
 }}""")
         ])
         
         response = self.llm.invoke(prompt.format_messages(
-            alert_description=state["alert_description"],
-            incident_time=state["timestamp"],
-            deployments=json.dumps(recent_deployments, indent=2)
+            service_name=state["service"]["name"],
+            service_version=state["service"]["version"],
+            environment=state["environment"],
+            incident_time=state["timestamp_utc"],
+            firing_duration=state["trigger"]["firing_duration_seconds"],
+            deploy_id=deployment_ctx.get("last_deploy_id"),
+            deploy_time=deployment_ctx.get("last_deploy_timestamp_utc"),
+            time_since_deploy=deployment_ctx.get("time_since_last_deploy_minutes"),
+            changed_components=", ".join(deployment_ctx.get("changed_components", [])),
+            config_changes=json.dumps(deployment_ctx.get("config_changes", []), indent=2),
+            deployment_context=json.dumps(deployment_ctx, indent=2)
         ))
         
         try:
             deploy_findings = json.loads(response.content)
         except:
-            # Fallback
-            has_recent = len(recent_deployments) > 0
+            # Fallback using actual deployment_context
             deploy_findings = {
-                "recent_deployment": has_recent,
-                "deployment_time": recent_deployments[0]["timestamp"] if has_recent else None,
-                "deployment_id": recent_deployments[0]["deployment_id"] if has_recent else None,
-                "config_changes": random.choice([True, False]),
-                "rollback_available": has_recent,
-                "previous_stable_version": "v1.2.3" if has_recent else None
+                "deployment_related": deployment_ctx.get("time_since_last_deploy_minutes", 999) < 60,
+                "deployment_id": deployment_ctx.get("last_deploy_id"),
+                "deployment_time": deployment_ctx.get("last_deploy_timestamp_utc"),
+                "time_since_deploy_minutes": deployment_ctx.get("time_since_last_deploy_minutes"),
+                "changed_components": deployment_ctx.get("changed_components", []),
+                "config_changes_detected": len(deployment_ctx.get("config_changes", [])) > 0,
+                "risky_config_changes": [c["key"] for c in deployment_ctx.get("config_changes", [])],
+                "rollback_recommended": deployment_ctx.get("time_since_last_deploy_minutes", 999) < 60,
+                "risk_assessment": "high" if deployment_ctx.get("time_since_last_deploy_minutes", 999) < 30 else "medium"
             }
         
         state["deploy_findings"] = deploy_findings
         state["next_action"] = "decide"
         
-        if deploy_findings.get("recent_deployment"):
-            print(f"   🔴 Recent Deployment Detected!")
-            print(f"   Time: {deploy_findings.get('deployment_time')}")
-            print(f"   ID: {deploy_findings.get('deployment_id')}")
+        if deploy_findings.get("deployment_related"):
+            print(f"   🔴 DEPLOYMENT CORRELATION DETECTED!")
+            print(f"   Deploy ID: {deploy_findings.get('deployment_id')}")
+            print(f"   Deploy Time: {deploy_findings.get('deployment_time')}")
+            print(f"   Time Since Deploy: {deploy_findings.get('time_since_deploy_minutes')} minutes")
+            print(f"   Changed Components: {', '.join(deploy_findings.get('changed_components', []))}")
+            if deploy_findings.get('config_changes_detected'):
+                print(f"   🚨 Config Changes: {', '.join(deploy_findings.get('risky_config_changes', []))}")
+            print(f"   Risk Assessment: {deploy_findings.get('risk_assessment', 'N/A').upper()}")
+            print(f"   Rollback Recommended: {'YES ⚠️' if deploy_findings.get('rollback_recommended') else 'No'}")
             if "correlation_analysis" in deploy_findings:
                 print(f"   Analysis: {deploy_findings['correlation_analysis']}")
-            print(f"   Rollback Available: {'Yes ✓' if deploy_findings.get('rollback_available') else 'No'}")
         else:
-            print(f"   ✓ No recent deployments in investigation window")
+            print(f"   ✓ No deployment correlation detected")
         
         state["messages"].append(
             SystemMessage(content=f"[INVESTIGATE-DEPLOY] Deployment analysis complete")
@@ -522,12 +645,32 @@ Return a JSON object:
 def create_incident_commander_graph():
     """Build the complete Autonomous Incident Commander graph"""
     
-    # Initialize Gemini LLM
+    # Initialize Gemini LLM with SSL verification bypassed for corporate networks
+    # WARNING: Only use this in development or trusted corporate networks
+    import httpx
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    # Monkey patch httpx to disable SSL verification
+    import ssl
+    _original_create_default_context = ssl.create_default_context
+    
+    def _create_unverified_context(*args, **kwargs):
+        context = _original_create_default_context(*args, **kwargs)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        return context
+    
+    ssl.create_default_context = _create_unverified_context
+    
     llm = ChatGoogleGenerativeAI(
-        model="gemini-pro",
+        model="gemini-1.5-flash-002",  # Use Gemini 1.5 Flash 002
         temperature=0.1,
-        google_api_key=os.getenv("GOOGLE_API_KEY")
+        google_api_key=os.getenv("GOOGLE_API_KEY"),
     )
+    
+    # Restore original function
+    ssl.create_default_context = _original_create_default_context
     
     # Initialize agents with LLM
     commander = CommanderAgent(llm)
@@ -567,18 +710,37 @@ def create_incident_commander_graph():
 
 # ==================== EXECUTION ====================
 
-def run_incident_commander(alert_description: str, severity: str = "HIGH"):
-    """Execute the Autonomous Incident Commander"""
+def run_incident_commander(incident_data: dict):
+    """Execute the Autonomous Incident Commander
+    
+    Args:
+        incident_data: Comprehensive incident data including:
+        - incident_id, timestamp_utc, environment, region
+        - service: {name, version, instance_count}
+        - trigger: {type, source, severity, alert_name, firing_duration_seconds}
+        - metrics_snapshot: {...}
+        - log_signals: {...}
+        - deployment_context: {...}
+        - customer_impact: {...}
+        - correlation_ids: {...}
+    """
     
     # Create the graph
     app = create_incident_commander_graph()
     
-    # Initialize state with incident data
+    # Initialize state with comprehensive incident data
     initial_state = {
-        "alert_id": f"INC-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-        "alert_description": alert_description,
-        "severity": severity,
-        "timestamp": datetime.now().isoformat(),
+        "incident_id": incident_data.get("incident_id"),
+        "timestamp_utc": incident_data.get("timestamp_utc"),
+        "environment": incident_data.get("environment"),
+        "region": incident_data.get("region"),
+        "service": incident_data.get("service", {}),
+        "trigger": incident_data.get("trigger", {}),
+        "metrics_snapshot": incident_data.get("metrics_snapshot", {}),
+        "log_signals": incident_data.get("log_signals", {}),
+        "deployment_context": incident_data.get("deployment_context", {}),
+        "customer_impact": incident_data.get("customer_impact", {}),
+        "correlation_ids": incident_data.get("correlation_ids", {}),
         "stage": "DETECT",
         "investigation_plan": [],
         "metrics_findings": {},
@@ -605,18 +767,69 @@ def run_incident_commander(alert_description: str, severity: str = "HIGH"):
 
 
 if __name__ == "__main__":
-    # Example incident scenarios
-    scenarios = [
-        ("High latency detected on payment service API - P95 latency exceeds 2000ms", "CRITICAL"),
-        ("Database connection pool exhausted - 503 errors increasing", "HIGH"),
-        ("Memory leak suspected in order processing service", "MEDIUM"),
-    ]
+    # Example comprehensive incident in the expected format
+    example_incident = {
+        "incident_id": "inc-2026-02-06-113742",
+        "timestamp_utc": "2026-02-06T11:37:42.391Z",
+        "environment": "production",
+        "region": "ap-southeast-1",
+        "service": {
+            "name": "checkout-service",
+            "version": "v2.18.4",
+            "instance_count": 24
+        },
+        "trigger": {
+            "type": "alert",
+            "source": "prometheus",
+            "severity": "critical",
+            "alert_name": "High_P99_Latency",
+            "firing_duration_seconds": 312
+        },
+        "metrics_snapshot": {
+            "p99_latency_ms": 1860,
+            "baseline_p99_latency_ms": 420,
+            "cpu_utilization_pct": 91.4,
+            "memory_utilization_pct": 88.9,
+            "error_rate_pct": 3.7
+        },
+        "log_signals": {
+            "error_count_last_5min": 1243,
+            "dominant_exception": "java.lang.OutOfMemoryError: GC overhead limit exceeded",
+            "sample_stack_trace_hash": "a9f3c2d7",
+            "affected_endpoints": [
+                "/checkout/confirm",
+                "/checkout/apply-coupon"
+            ]
+        },
+        "deployment_context": {
+            "last_deploy_id": "deploy-74219",
+            "last_deploy_timestamp_utc": "2026-02-06T11:12:08.000Z",
+            "time_since_last_deploy_minutes": 25,
+            "changed_components": [
+                "pricing-engine",
+                "promotion-rules"
+            ],
+            "config_changes": [
+                {
+                    "key": "promo.cache.ttl",
+                    "old_value": "300s",
+                    "new_value": "0s"
+                }
+            ]
+        },
+        "customer_impact": {
+            "estimated_affected_requests_pct": 18.6,
+            "failed_transactions_last_10min": 742,
+            "revenue_impact_usd_per_min": 4200
+        },
+        "correlation_ids": {
+            "trace_id_sample": "4f3c9b2a8d1e",
+            "request_id_sample": "req-882193ab"
+        }
+    }
     
-    # Run the first scenario
-    result = run_incident_commander(
-        alert_description=scenarios[0][0],
-        severity=scenarios[0][1]
-    )
+    # Run the incident commander with the comprehensive incident
+    result = run_incident_commander(example_incident)
     
     print("\n" + "="*70)
     print("  EXECUTION COMPLETE")
