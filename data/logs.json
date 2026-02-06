@@ -1,0 +1,7 @@
+[
+  "2026-02-06T09:45:01Z INFO CheckoutService request started",
+  "2026-02-06T09:45:02Z ERROR DBConnectionTimeout pool exhausted",
+  "2026-02-06T09:45:03Z WARN Retrying database connection",
+  "2026-02-06T09:45:05Z ERROR DBConnectionTimeout pool exhausted",
+  "2026-02-06T09:45:08Z ERROR DBConnectionTimeout pool exhausted"
+]
